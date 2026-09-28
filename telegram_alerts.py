@@ -1,14 +1,23 @@
+import os
 import logging
 from aiogram import Bot
+from dotenv import load_dotenv
 
-BOT_TOKEN = "8928813389:AAH3YndQddjn5l5aXN_wFVTaO4_CxFmnYA4"
-CHAT_ID = 997497221  # Твой числовой ID
+# Загружаем переменные из локального файла .env
+load_dotenv()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 
 async def send_voltage_alert(voltage_value: float, sensor_id: str = "Sensor-01"):
     """
     Отправляет экстренное сообщение в Telegram и корректно закрывает сессию.
     """
+    if not BOT_TOKEN or not CHAT_ID:
+        logging.error("Ошибка: BOT_TOKEN или CHAT_ID не найдены в файле .env!")
+        return
+
     bot = Bot(token=BOT_TOKEN)
     message = (
         f"⚠️ **ВНИМАНИЕ: СКАЧОК НАПРЯЖЕНИЯ!** ⚠️\n\n"
@@ -17,11 +26,12 @@ async def send_voltage_alert(voltage_value: float, sensor_id: str = "Sensor-01")
         f"🚨 **Статус:** Превышение допустимого порога!"
     )
     try:
-        await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
+        await bot.send_message(
+            chat_id=int(CHAT_ID), text=message, parse_mode="Markdown"
+        )
     except Exception as e:
         logging.error(f"Ошибка отправки Telegram-алерта: {e}")
     finally:
-        # Обязательно закрываем сессию aiohttp, чтобы не было Unclosed client session
         await bot.session.close()
 
 
