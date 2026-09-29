@@ -1,80 +1,113 @@
 import json
-import threading
+import sqlite3
 import time
 import pandas as pd
 import paho.mqtt.client as mqtt
-import plotly.express as px
 import streamlit as st
+from database import DB_NAME, init_db
 
-# Глобальное хранилище данных
-if "data_history" not in st.session_state:
-    st.session_state.data_history = []
+init_db()
 
-BROKER = "broker.hivemq.com"
-PORT = 1883
-TOPIC = "astana/smart_tech/energy_meter"
+st.set_page_config(page_title="Smart Energy Dashboard", page_icon="⚡", layout="wide")
 
-# Настройка страницы Streamlit
-st.set_page_config(page_title="Smart Energy Dashboard", layout="wide")
-st.title("⚡ Smart Energy & IoT Monitoring System")
+st.title("⚡ Мониторинг энергосети в реальном времени")
 
 
-# Колбэк при получении нового сообщения
-def on_message(client, userdata, msg):
-    try:
-        payload = json.loads(msg.payload.decode())
-        st.session_state.data_history.append(payload)
-        # Храним только последние 30 измерений
-        if len(st.session_state.data_history) > 30:
-            st.session_state.data_history.pop(0)
-    except Exception as e:
-        pass
-
-
-# Запуск MQTT-клиента в отдельном потоке
+# Глобальный кэшированный клиент и хранилище
 @st.cache_resource
-def start_mqtt():
+def setup_mqtt_and_store():
+    store = {
+        "timestamp": "--:--:--",
+        "voltage": 220.0,
+        "current": 0.0,
+        "power": 0.0,
+    }
+
+    def on_message(client, userdata, msg):
+        try:
+            payload = json.loads(msg.payload.decode())
+            store["timestamp"] = payload.get("timestamp", "--:--:--")
+            store["voltage"] = payload.get("voltage", 220.0)
+            store["current"] = payload.get("current", 0.0)
+            store["power"] = payload.get("power", 0.0)
+        except Exception as e:
+            print(f"Ошибка MQTT: {e}")
+
+    BROKER = "broker.hivemq.com"
+    PORT = 1883
+    TOPIC = "smart_energy/sensor_01/data"
+
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.on_message = on_message
     client.connect(BROKER, PORT, 60)
     client.subscribe(TOPIC)
     client.loop_start()
-    return client
+
+    return store
 
 
-start_mqtt()
+data_store = setup_mqtt_and_store()
 
-# Создаем плейсхолдеры для обновления UI
-kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
-chart_placeholder = st.empty()
+tab1, tab2 = st.tabs(["📡 Реальное время", "🚨 История аномалий (SQLite)"])
 
-# Автообновление страницы раз в секунду
+with tab1:
+    st.subheader("Текущие показатели датчика")
+
+    # Создаём пустой контейнер для живых метрик
+    metrics_container = st.empty()
+
+with tab2:
+    st.subheader("Журнал зафиксированных аномалий")
+
+    def load_alerts():
+        try:
+            with sqlite3.connect(DB_NAME) as conn:
+                query = """
+                    SELECT 
+                        id AS 'ID',
+                        timestamp AS 'Время',
+                        voltage AS 'Напряжение (V)',
+                        current AS 'Ток (A)',
+                        power AS 'Мощность (кВт)',
+                        alert_type AS 'Тип аномалии'
+                    FROM alerts 
+                    ORDER BY id DESC
+                """
+                return pd.read_sql_query(query, conn)
+        except Exception as e:
+            st.error(f"Ошибка чтения БД: {e}")
+            return pd.DataFrame()
+
+    df_alerts = load_alerts()
+    if not df_alerts.empty:
+        st.write(f"Всего аномалий в базе: **{len(df_alerts)}**")
+        st.dataframe(df_alerts, use_container_width=True, hide_index=True)
+    else:
+        st.info("В базе данных пока нет записей о скачках.")
+
+    if st.button("🔄 Обновить историю"):
+        st.rerun()
+
+# Автоматическое прямое обновление карточек метрик во вкладке 1
 while True:
-    if st.session_state.data_history:
-        df = pd.DataFrame(st.session_state.data_history)
-        latest = df.iloc[-1]
+    with metrics_container.container():
+        voltage_val = data_store["voltage"]
+        current_val = data_store["current"]
+        power_val = data_store["power"]
+        time_val = data_store["timestamp"]
 
-        # Карточки метрик (KPI)
-        kpi_col1.metric(
-            "Напряжение (В)",
-            f"{latest['voltage']} V",
-            delta=round(latest["voltage"] - 220, 1),
-        )
-        kpi_col2.metric("Сила тока (А)", f"{latest['current']} A")
-        kpi_col3.metric("Мощность (кВт)", f"{latest['power']} kW")
+        col1, col2, col3 = st.columns(3)
 
-        # Проверка аномалий / алерты
-        if latest["voltage"] > 240.0:
-            st.warning(f"⚠️ Скачок напряжения! Зафиксировано: {latest['voltage']} В")
+        if voltage_val < 190.0 or voltage_val > 240.0:
+            col1.metric(
+                "⚡ Напряжение", f"{voltage_val} V", "АНОМАЛИЯ", delta_color="inverse"
+            )
+        else:
+            col1.metric("⚡ Напряжение", f"{voltage_val} V", "Норма")
 
-        # График мощности в реальном времени
-        fig = px.line(
-            df,
-            x="timestamp",
-            y="power",
-            title="Динамика потребления мощности (кВт)",
-            markers=True,
-        )
-        chart_placeholder.plotly_chart(fig, use_container_width=True)
+        col2.metric("🔌 Ток", f"{current_val} A")
+        col3.metric("💡 Мощность", f"{power_val} кВт")
+
+        st.caption(f"Последнее обновление: {time_val}")
 
     time.sleep(1)

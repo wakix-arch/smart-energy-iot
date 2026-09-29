@@ -1,5 +1,23 @@
-.env
+#Виртуальное окружение
+
 venv/
-__pycache__/
-*.pyc
+env/
+ENV/
+
+#Кэш Python
+
+pycache/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+#Конфиденциальные данные и файлы БД
+
+.env
+*.db
+energy.db
+
+#Настройки IDE
+
 .vscode/
+.idea/

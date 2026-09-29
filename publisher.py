@@ -4,21 +4,27 @@ import json
 import asyncio
 from datetime import datetime
 import paho.mqtt.client as mqtt
+
 from telegram_alerts import send_voltage_alert
+from database import init_db, log_alert
+
+# Инициализируем БД при старте
+init_db()
 
 BROKER = "broker.hivemq.com"
 PORT = 1883
 TOPIC = "smart_energy/sensor_01/data"
 
-client = mqtt.Client()
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 client.connect(BROKER, PORT, 60)
 
 print("⚡ Эмулятор датчика запущен. Нажмите Ctrl+C для остановки.")
 
 while True:
-    # 70% времени — норма (210-235V), 30% времени — скачок (170-189V или 240.1-260V)
-    if random.random() > 0.3:
-        voltage = round(random.uniform(210.0, 235.0), 1)
+    # 85% времени — полная норма (215-235V)
+    # 15% времени — редкие скачки (170-189V или 240.1-260V)
+    if random.random() > 0.15:
+        voltage = round(random.uniform(215.0, 235.0), 1)
     else:
         voltage = round(
             random.choice([random.uniform(170.0, 189.0), random.uniform(240.1, 260.0)]),
@@ -41,9 +47,15 @@ while True:
 
     # Проверка на аномалию (меньше 190V или больше 240V)
     if voltage < 190.0 or voltage > 240.0:
+        alert_type = "HIGH_VOLTAGE" if voltage > 240.0 else "LOW_VOLTAGE"
         print(
-            f"🚨 АНОМАЛИЯ! Напряжение {voltage} V вышло за пределы нормы. Отправляем алерт..."
+            f"🚨 АНОМАЛИЯ ({alert_type})! Напряжение {voltage} V. Сохраняем в БД и шлём алерт..."
         )
-        asyncio.run(send_voltage_alert(voltage_value=voltage))
+
+        # 1. Запись аномалии в локальную SQLite БД
+        log_alert(voltage=voltage, current=current, power=power, alert_type=alert_type)
+
+        # 2. Асинхронная отправка в Telegram
+        asyncio.run(send_voltage_alert(voltage=voltage, current=current, power=power))
 
     time.sleep(2)
